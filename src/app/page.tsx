@@ -6,9 +6,17 @@ import { SAMPLE_STARTER_DATA } from "@/lib/sampleData";
 import { generateOfficialHourLogCsv } from "@/lib/awardUtils";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 import {
+  addLogInSupabase,
   DEFAULT_SHARED_PROFILE_ID,
+  deleteGoalInSupabase,
+  deleteLogInSupabase,
+  EMPTY_AWARD_STATE,
   fetchStateFromSupabase,
+  saveGoalInSupabase,
   syncStateToSupabase,
+  updateExpeditionInSupabase,
+  updateLogInSupabase,
+  updateProfileInSupabase,
 } from "@/lib/supabaseSync";
 import {
   AwardLevelId,
@@ -26,7 +34,9 @@ import ProfileAdvisorView from "@/components/ProfileAdvisorView";
 import ExportAndSubmittableView from "@/components/ExportAndSubmittableView";
 import QuickLogForm from "@/components/QuickLogForm";
 import {
+  AlertCircle,
   Award,
+  CheckCircle2,
   ClipboardList,
   Cloud,
   CloudOff,
@@ -52,179 +62,176 @@ type NavTab =
   | "export"
   | "profile";
 
+interface ToastMessage {
+  type: "loading" | "success" | "error";
+  message: string;
+}
+
 export default function HomePage() {
   const [state, setState] = useState<CongressionalAwardState>(
-    SAMPLE_STARTER_DATA
+    EMPTY_AWARD_STATE
   );
   const [profileId, setProfileId] = useState<string>(DEFAULT_SHARED_PROFILE_ID);
-  const [isHydrated, setIsHydrated] = useState(false);
+  const [isInitialLoading, setIsInitialLoading] = useState<boolean>(true);
   const [activeTab, setActiveTab] = useState<NavTab>("dashboard");
   const [showQuickLogModal, setShowQuickLogModal] = useState(false);
   const [syncStatus, setSyncStatus] = useState<
     "idle" | "syncing" | "synced" | "error" | "local_only"
-  >(isSupabaseConfigured ? "idle" : "local_only");
+  >(isSupabaseConfigured ? "syncing" : "local_only");
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+  const [toast, setToast] = useState<ToastMessage | null>(null);
 
-  // Prevent echo loops when applying remote Supabase updates
-  const isApplyingRemoteRef = useRef(false);
+  const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const profileDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const expeditionDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+  // Prevent Realtime echo while a local CRUD request is in flight
+  const isMutatingRef = useRef(false);
 
-  // Pull latest state from Supabase
-  const pullFromSupabase = useCallback(async () => {
-    if (!isSupabaseConfigured || !supabase) {
-      setSyncStatus("local_only");
-      return {
-        success: false,
-        message:
-          "Supabase environment variables are not configured. Running in LocalStorage mode.",
-      };
-    }
-
-    setSyncStatus("syncing");
-    const result = await fetchStateFromSupabase();
-    if (result.error) {
-      setSyncStatus("error");
-      return {
-        success: false,
-        message: `Supabase error: ${result.error}. Using LocalStorage fallback.`,
-      };
-    }
-
-    if (result.state && result.profileId) {
-      isApplyingRemoteRef.current = true;
-      setState(result.state);
-      setProfileId(result.profileId);
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(result.state));
-        localStorage.setItem(PROFILE_ID_STORAGE_KEY, result.profileId);
-      } catch {
-        // Ignore storage quota errors
+  const showToast = useCallback(
+    (type: ToastMessage["type"], message: string, durationMs = 3000) => {
+      if (toastTimeoutRef.current) {
+        clearTimeout(toastTimeoutRef.current);
       }
-      const timeStr = new Date().toLocaleTimeString();
-      setLastSyncedAt(timeStr);
-      setSyncStatus("synced");
-      setTimeout(() => {
-        isApplyingRemoteRef.current = false;
-      }, 150);
-      return {
-        success: true,
-        message: `Loaded latest cloud data (${result.state.logs.length} logs, ${result.state.goals.length} goals) from Supabase.`,
-      };
-    }
+      setToast({ type, message });
+      if (type !== "loading") {
+        toastTimeoutRef.current = setTimeout(() => {
+          setToast(null);
+        }, durationMs);
+      }
+    },
+    []
+  );
 
-    setSyncStatus("idle");
-    return {
-      success: false,
-      message:
-        "No profile found in Supabase yet. Click 'Sync LocalStorage to Supabase' to push your current data!",
-    };
-  }, []);
+  const saveToLocalCache = useCallback(
+    (nextState: CongressionalAwardState, nextProfileId?: string) => {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
+        if (nextProfileId) {
+          localStorage.setItem(PROFILE_ID_STORAGE_KEY, nextProfileId);
+        }
+      } catch (err) {
+        console.error("Failed to save state to localStorage:", err);
+      }
+    },
+    []
+  );
 
-  // Push current state (or LocalStorage state) to Supabase
-  const pushToSupabase = useCallback(
-    async (stateToSync: CongressionalAwardState, currentProfId: string) => {
+  // Pull authoritative state directly from Supabase
+  const pullFromSupabase = useCallback(
+    async (silent = false) => {
       if (!isSupabaseConfigured || !supabase) {
         setSyncStatus("local_only");
         return {
           success: false,
           message:
-            "Supabase credentials are not set in .env.local yet. Please add NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY.",
+            "Supabase environment variables are not configured. Running in LocalStorage mode.",
         };
       }
 
-      setSyncStatus("syncing");
-      const res = await syncStateToSupabase(stateToSync, currentProfId);
-      if (res.success) {
-        if (res.profileId) {
-          setProfileId(res.profileId);
-          try {
-            localStorage.setItem(PROFILE_ID_STORAGE_KEY, res.profileId);
-          } catch {
-            // Ignore
-          }
-        }
-        setLastSyncedAt(new Date().toLocaleTimeString());
-        setSyncStatus("synced");
-      } else {
-        setSyncStatus("error");
+      if (!silent) {
+        setSyncStatus("syncing");
       }
+
+      const result = await fetchStateFromSupabase();
+      if (result.error) {
+        console.error("[Supabase pullFromSupabase error]:", result.error);
+        setSyncStatus("error");
+        return {
+          success: false,
+          message: `Supabase error: ${result.error}`,
+        };
+      }
+
+      setState(result.state);
+      setProfileId(result.profileId);
+      saveToLocalCache(result.state, result.profileId);
+      setLastSyncedAt(new Date().toLocaleTimeString());
+      setSyncStatus("synced");
+
       return {
-        success: res.success,
-        message: res.message,
+        success: true,
+        message: result.isEmpty
+          ? "Connected to Supabase (database is currently empty)."
+          : `Loaded ${result.state.logs.length} activity logs and ${result.state.goals.length} goals from Supabase.`,
       };
     },
-    []
+    [saveToLocalCache]
   );
 
-  // Initial load: LocalStorage baseline + Supabase Cloud fetch (if configured)
+  // Single Source of Truth on Mount:
+  // When Supabase is configured, query Supabase directly and NEVER overwrite with mock data.
   useEffect(() => {
-    let localBaseline = SAMPLE_STARTER_DATA;
-    let storedProfileId = DEFAULT_SHARED_PROFILE_ID;
+    let isMounted = true;
 
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed && parsed.profile && Array.isArray(parsed.logs)) {
-          localBaseline = parsed;
-          setState(parsed);
-        }
-      }
-      const savedProfId = localStorage.getItem(PROFILE_ID_STORAGE_KEY);
-      if (savedProfId) {
-        storedProfileId = savedProfId;
-        setProfileId(savedProfId);
-      }
-    } catch (err) {
-      console.error("Failed to read state from localStorage:", err);
-    } finally {
-      setIsHydrated(true);
-    }
-
-    if (isSupabaseConfigured && supabase) {
-      (async () => {
+    async function initializeData() {
+      if (isSupabaseConfigured && supabase) {
         setSyncStatus("syncing");
         const cloud = await fetchStateFromSupabase();
-        if (cloud.state && cloud.profileId) {
-          isApplyingRemoteRef.current = true;
+        if (!isMounted) return;
+
+        if (!cloud.error) {
+          // Use exact Supabase state (even if tables are empty — do NOT re-seed mock data!)
           setState(cloud.state);
           setProfileId(cloud.profileId);
-          try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(cloud.state));
-            localStorage.setItem(PROFILE_ID_STORAGE_KEY, cloud.profileId);
-          } catch {
-            // Ignore
-          }
+          saveToLocalCache(cloud.state, cloud.profileId);
           setLastSyncedAt(new Date().toLocaleTimeString());
           setSyncStatus("synced");
-          setTimeout(() => {
-            isApplyingRemoteRef.current = false;
-          }, 150);
-        } else if (!cloud.error) {
-          // Database is reachable but empty: automatically seed with localBaseline
-          const seedRes = await syncStateToSupabase(
-            localBaseline,
-            storedProfileId
-          );
-          if (seedRes.success) {
-            setLastSyncedAt(new Date().toLocaleTimeString());
-            setSyncStatus("synced");
-          } else {
-            setSyncStatus("error");
-          }
         } else {
+          console.error(
+            "[Supabase mount fetch failed, falling back to localStorage]:",
+            cloud.error
+          );
           setSyncStatus("error");
+          try {
+            const saved = localStorage.getItem(STORAGE_KEY);
+            if (saved) {
+              const parsed = JSON.parse(saved);
+              if (parsed && parsed.profile && Array.isArray(parsed.logs)) {
+                setState(parsed);
+              }
+            }
+          } catch (err) {
+            console.error("Failed to read fallback localStorage:", err);
+          }
         }
-      })();
-    } else {
-      setSyncStatus("local_only");
+      } else {
+        // Offline / LocalStorage-only mode (no Supabase env vars set)
+        setSyncStatus("local_only");
+        try {
+          const saved = localStorage.getItem(STORAGE_KEY);
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            if (parsed && parsed.profile && Array.isArray(parsed.logs)) {
+              setState(parsed);
+            }
+          } else {
+            // Only in purely local mode on very first visit with no storage, initialize empty state
+            setState(EMPTY_AWARD_STATE);
+          }
+        } catch (err) {
+          console.error("Failed to read state from localStorage:", err);
+        }
+      }
+
+      if (isMounted) {
+        setIsInitialLoading(false);
+      }
     }
+
+    initializeData();
 
     if (typeof window !== "undefined" && "serviceWorker" in navigator) {
       navigator.serviceWorker.register("/sw.js").catch(() => {
         // Non-blocking PWA service worker registration
       });
     }
-  }, []);
+
+    return () => {
+      isMounted = false;
+    };
+  }, [saveToLocalCache]);
 
   // Subscribe to Supabase Realtime changes for cross-device live syncing
   useEffect(() => {
@@ -237,28 +244,28 @@ export default function HomePage() {
         "postgres_changes",
         { event: "*", schema: "public", table: "profiles" },
         () => {
-          if (!isApplyingRemoteRef.current) pullFromSupabase();
+          if (!isMutatingRef.current) pullFromSupabase(true);
         }
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "goals" },
         () => {
-          if (!isApplyingRemoteRef.current) pullFromSupabase();
+          if (!isMutatingRef.current) pullFromSupabase(true);
         }
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "activity_logs" },
         () => {
-          if (!isApplyingRemoteRef.current) pullFromSupabase();
+          if (!isMutatingRef.current) pullFromSupabase(true);
         }
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "expeditions" },
         () => {
-          if (!isApplyingRemoteRef.current) pullFromSupabase();
+          if (!isMutatingRef.current) pullFromSupabase(true);
         }
       )
       .subscribe();
@@ -268,98 +275,245 @@ export default function HomePage() {
     };
   }, [pullFromSupabase]);
 
-  // Persist to LocalStorage AND auto-sync to Supabase whenever state changes
-  useEffect(() => {
-    if (!isHydrated) return;
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch (err) {
-      console.error("Failed to save state to localStorage:", err);
+  // ============================================================================
+  // DIRECT REAL-TIME SUPABASE CRUD HANDLERS
+  // ============================================================================
+
+  const handleTargetLevelChange = async (newLevel: AwardLevelId) => {
+    const updatedProfile: ParticipantProfile = {
+      ...state.profile,
+      targetLevel: newLevel,
+    };
+    const nextState: CongressionalAwardState = {
+      ...state,
+      profile: updatedProfile,
+    };
+    setState(nextState);
+    saveToLocalCache(nextState);
+
+    if (!isSupabaseConfigured) return;
+
+    isMutatingRef.current = true;
+    setSyncStatus("syncing");
+    showToast("loading", "Updating target award level in Supabase...");
+    const res = await updateProfileInSupabase(updatedProfile, profileId);
+    isMutatingRef.current = false;
+
+    if (res.success) {
+      setLastSyncedAt(new Date().toLocaleTimeString());
+      setSyncStatus("synced");
+      showToast("success", "Target award level updated in Supabase");
+    } else {
+      setSyncStatus("error");
+      showToast("error", res.message, 5000);
     }
-
-    if (
-      !isSupabaseConfigured ||
-      !supabase ||
-      isApplyingRemoteRef.current
-    ) {
-      return;
-    }
-
-    const timer = setTimeout(() => {
-      pushToSupabase(state, profileId);
-    }, 500);
-
-    return () => clearTimeout(timer);
-  }, [state, isHydrated, profileId, pushToSupabase]);
-
-  const handleTargetLevelChange = (newLevel: AwardLevelId) => {
-    setState((prev) => ({
-      ...prev,
-      profile: {
-        ...prev.profile,
-        targetLevel: newLevel,
-      },
-    }));
   };
 
   const handleUpdateProfile = (updatedProfile: ParticipantProfile) => {
-    setState((prev) => ({
-      ...prev,
+    const nextState: CongressionalAwardState = {
+      ...state,
       profile: updatedProfile,
-    }));
+    };
+    setState(nextState);
+    saveToLocalCache(nextState);
+
+    if (!isSupabaseConfigured) return;
+
+    if (profileDebounceRef.current) {
+      clearTimeout(profileDebounceRef.current);
+    }
+    setSyncStatus("syncing");
+    profileDebounceRef.current = setTimeout(async () => {
+      isMutatingRef.current = true;
+      showToast("loading", "Saving profile to Supabase...");
+      const res = await updateProfileInSupabase(updatedProfile, profileId);
+      isMutatingRef.current = false;
+
+      if (res.success) {
+        setLastSyncedAt(new Date().toLocaleTimeString());
+        setSyncStatus("synced");
+        showToast("success", "Profile saved to Supabase");
+      } else {
+        setSyncStatus("error");
+        showToast("error", res.message, 5000);
+      }
+    }, 500);
   };
 
-  const handleAddLog = (newEntry: Omit<HourLogEntry, "id" | "createdAt">) => {
+  const handleAddLog = async (
+    newEntry: Omit<HourLogEntry, "id" | "createdAt">
+  ) => {
     const entry: HourLogEntry = {
       ...newEntry,
       id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       createdAt: new Date().toISOString(),
     };
-    setState((prev) => ({
-      ...prev,
-      logs: [entry, ...prev.logs],
-    }));
+    const nextState: CongressionalAwardState = {
+      ...state,
+      logs: [entry, ...state.logs],
+    };
+    setState(nextState);
+    saveToLocalCache(nextState);
+
+    if (!isSupabaseConfigured) return;
+
+    isMutatingRef.current = true;
+    setSyncStatus("syncing");
+    showToast("loading", "Saving activity log to Supabase...");
+    const res = await addLogInSupabase(entry, state.profile, profileId);
+    isMutatingRef.current = false;
+
+    if (res.success) {
+      setLastSyncedAt(new Date().toLocaleTimeString());
+      setSyncStatus("synced");
+      showToast("success", res.message);
+    } else {
+      setSyncStatus("error");
+      showToast("error", res.message, 5000);
+    }
   };
 
-  const handleUpdateLog = (updated: HourLogEntry) => {
-    setState((prev) => ({
-      ...prev,
-      logs: prev.logs.map((l) => (l.id === updated.id ? updated : l)),
-    }));
+  const handleUpdateLog = async (updated: HourLogEntry) => {
+    const nextState: CongressionalAwardState = {
+      ...state,
+      logs: state.logs.map((l) => (l.id === updated.id ? updated : l)),
+    };
+    setState(nextState);
+    saveToLocalCache(nextState);
+
+    if (!isSupabaseConfigured) return;
+
+    isMutatingRef.current = true;
+    setSyncStatus("syncing");
+    showToast("loading", "Updating activity log in Supabase...");
+    const res = await updateLogInSupabase(updated);
+    isMutatingRef.current = false;
+
+    if (res.success) {
+      setLastSyncedAt(new Date().toLocaleTimeString());
+      setSyncStatus("synced");
+      showToast("success", res.message);
+    } else {
+      setSyncStatus("error");
+      showToast("error", res.message, 5000);
+    }
   };
 
-  const handleDeleteLog = (id: string) => {
-    setState((prev) => ({
-      ...prev,
-      logs: prev.logs.filter((l) => l.id !== id),
-    }));
+  const handleDeleteLog = async (id: string) => {
+    const nextState: CongressionalAwardState = {
+      ...state,
+      logs: state.logs.filter((l) => l.id !== id),
+    };
+    setState(nextState);
+    saveToLocalCache(nextState);
+
+    if (!isSupabaseConfigured) return;
+
+    isMutatingRef.current = true;
+    setSyncStatus("syncing");
+    showToast("loading", "Deleting activity log from Supabase...");
+    const res = await deleteLogInSupabase(id);
+    isMutatingRef.current = false;
+
+    if (res.success) {
+      setLastSyncedAt(new Date().toLocaleTimeString());
+      setSyncStatus("synced");
+      showToast("success", res.message);
+    } else {
+      setSyncStatus("error");
+      showToast("error", res.message, 5000);
+    }
   };
 
-  const handleSaveGoal = (goal: GoalItem) => {
-    setState((prev) => {
-      const exists = prev.goals.some((g) => g.id === goal.id);
-      const updatedGoals = exists
-        ? prev.goals.map((g) => (g.id === goal.id ? goal : g))
-        : [...prev.goals, goal];
-      return {
-        ...prev,
-        goals: updatedGoals,
-      };
-    });
+  const handleSaveGoal = async (goal: GoalItem) => {
+    const exists = state.goals.some((g) => g.id === goal.id);
+    const updatedGoals = exists
+      ? state.goals.map((g) => (g.id === goal.id ? goal : g))
+      : [...state.goals, goal];
+    const nextState: CongressionalAwardState = {
+      ...state,
+      goals: updatedGoals,
+    };
+    setState(nextState);
+    saveToLocalCache(nextState);
+
+    if (!isSupabaseConfigured) return;
+
+    isMutatingRef.current = true;
+    setSyncStatus("syncing");
+    showToast("loading", "Saving goal to Supabase...");
+    const res = await saveGoalInSupabase(goal, state.profile, profileId);
+    isMutatingRef.current = false;
+
+    if (res.success) {
+      setLastSyncedAt(new Date().toLocaleTimeString());
+      setSyncStatus("synced");
+      showToast("success", res.message);
+    } else {
+      setSyncStatus("error");
+      showToast("error", res.message, 5000);
+    }
   };
 
-  const handleDeleteGoal = (id: string) => {
-    setState((prev) => ({
-      ...prev,
-      goals: prev.goals.filter((g) => g.id !== id),
-    }));
+  const handleDeleteGoal = async (id: string) => {
+    const nextState: CongressionalAwardState = {
+      ...state,
+      goals: state.goals.filter((g) => g.id !== id),
+    };
+    setState(nextState);
+    saveToLocalCache(nextState);
+
+    if (!isSupabaseConfigured) return;
+
+    isMutatingRef.current = true;
+    setSyncStatus("syncing");
+    showToast("loading", "Deleting goal from Supabase...");
+    const res = await deleteGoalInSupabase(id);
+    isMutatingRef.current = false;
+
+    if (res.success) {
+      setLastSyncedAt(new Date().toLocaleTimeString());
+      setSyncStatus("synced");
+      showToast("success", res.message);
+    } else {
+      setSyncStatus("error");
+      showToast("error", res.message, 5000);
+    }
   };
 
   const handleUpdateExpedition = (updatedExpedition: ExpeditionData) => {
-    setState((prev) => ({
-      ...prev,
+    const nextState: CongressionalAwardState = {
+      ...state,
       expedition: updatedExpedition,
-    }));
+    };
+    setState(nextState);
+    saveToLocalCache(nextState);
+
+    if (!isSupabaseConfigured) return;
+
+    if (expeditionDebounceRef.current) {
+      clearTimeout(expeditionDebounceRef.current);
+    }
+    setSyncStatus("syncing");
+    expeditionDebounceRef.current = setTimeout(async () => {
+      isMutatingRef.current = true;
+      showToast("loading", "Saving expedition changes to Supabase...");
+      const res = await updateExpeditionInSupabase(
+        updatedExpedition,
+        state.profile,
+        profileId
+      );
+      isMutatingRef.current = false;
+
+      if (res.success) {
+        setLastSyncedAt(new Date().toLocaleTimeString());
+        setSyncStatus("synced");
+        showToast("success", res.message);
+      } else {
+        setSyncStatus("error");
+        showToast("error", res.message, 5000);
+      }
+    }, 500);
   };
 
   const handleExportOfficialCsv = () => {
@@ -375,8 +529,55 @@ export default function HomePage() {
     URL.revokeObjectURL(url);
   };
 
-  const handleResetSampleData = () => {
+  // Explicit "Reset to Demo Data" action — only loads SAMPLE_STARTER_DATA when user clicks this button
+  const handleResetSampleData = async () => {
     setState(SAMPLE_STARTER_DATA);
+    saveToLocalCache(SAMPLE_STARTER_DATA);
+
+    if (!isSupabaseConfigured) {
+      showToast("success", "Reset to Demo Data in LocalStorage");
+      return;
+    }
+
+    isMutatingRef.current = true;
+    setSyncStatus("syncing");
+    showToast("loading", "Loading Demo Data into Supabase...");
+    const res = await syncStateToSupabase(SAMPLE_STARTER_DATA, profileId);
+    isMutatingRef.current = false;
+
+    if (res.success) {
+      setLastSyncedAt(new Date().toLocaleTimeString());
+      setSyncStatus("synced");
+      showToast("success", "Demo Data loaded and synced to Supabase!");
+    } else {
+      setSyncStatus("error");
+      showToast("error", res.message, 5000);
+    }
+  };
+
+  const handleImportJsonState = async (newState: CongressionalAwardState) => {
+    setState(newState);
+    saveToLocalCache(newState);
+
+    if (!isSupabaseConfigured) {
+      showToast("success", "Imported JSON backup into LocalStorage");
+      return;
+    }
+
+    isMutatingRef.current = true;
+    setSyncStatus("syncing");
+    showToast("loading", "Syncing imported JSON backup to Supabase...");
+    const res = await syncStateToSupabase(newState, profileId);
+    isMutatingRef.current = false;
+
+    if (res.success) {
+      setLastSyncedAt(new Date().toLocaleTimeString());
+      setSyncStatus("synced");
+      showToast("success", "Imported JSON backup and synced to Supabase!");
+    } else {
+      setSyncStatus("error");
+      showToast("error", res.message, 5000);
+    }
   };
 
   const handleSyncLocalStorageToSupabase = async () => {
@@ -392,10 +593,35 @@ export default function HomePage() {
     } catch {
       // Fallback to in-memory state
     }
-    return await pushToSupabase(dataToSync, profileId);
+
+    isMutatingRef.current = true;
+    setSyncStatus("syncing");
+    showToast("loading", "Syncing LocalStorage data to Supabase...");
+    const res = await syncStateToSupabase(dataToSync, profileId);
+    isMutatingRef.current = false;
+
+    if (res.success) {
+      if (res.profileId) {
+        setProfileId(res.profileId);
+      }
+      setState(dataToSync);
+      saveToLocalCache(dataToSync, res.profileId);
+      setLastSyncedAt(new Date().toLocaleTimeString());
+      setSyncStatus("synced");
+      showToast("success", res.message);
+    } else {
+      setSyncStatus("error");
+      showToast("error", res.message, 5000);
+    }
+
+    return {
+      success: res.success,
+      message: res.message,
+    };
   };
 
-  const targetReq = AWARD_LEVELS[state.profile.targetLevel];
+  const targetReq =
+    AWARD_LEVELS[state.profile.targetLevel] || AWARD_LEVELS.bronze_medal;
 
   const navItems: {
     id: NavTab;
@@ -498,7 +724,7 @@ export default function HomePage() {
                 ) : syncStatus === "error" ? (
                   <>
                     <CloudOff className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Local Fallback</span>
+                    <span>Sync Error</span>
                   </>
                 ) : (
                   <>
@@ -556,64 +782,112 @@ export default function HomePage() {
 
       {/* Main Content Container */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-5 sm:py-6">
-        {activeTab === "dashboard" && (
-          <DashboardOverview
-            state={state}
-            onTargetLevelChange={handleTargetLevelChange}
-            onAddLog={handleAddLog}
-            onNavigateTab={(tab) => setActiveTab(tab as NavTab)}
-            onExportCsv={handleExportOfficialCsv}
-          />
-        )}
+        {isInitialLoading ? (
+          <div className="bg-white rounded-2xl border border-slate-200 p-12 shadow-sm flex flex-col items-center justify-center text-center space-y-3">
+            <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+            <h2 className="text-base font-bold text-slate-900">
+              Loading Congressional Award Recordbook...
+            </h2>
+            <p className="text-xs text-slate-500">
+              {isSupabaseConfigured
+                ? "Fetching latest data from Supabase cloud database..."
+                : "Loading local workspace..."}
+            </p>
+          </div>
+        ) : (
+          <>
+            {activeTab === "dashboard" && (
+              <DashboardOverview
+                state={state}
+                onTargetLevelChange={handleTargetLevelChange}
+                onAddLog={handleAddLog}
+                onNavigateTab={(tab) => setActiveTab(tab as NavTab)}
+                onExportCsv={handleExportOfficialCsv}
+              />
+            )}
 
-        {activeTab === "logs" && (
-          <HourLogTable
-            logs={state.logs}
-            goals={state.goals}
-            activityStartDate={state.profile.activityStartDate}
-            onUpdateLog={handleUpdateLog}
-            onDeleteLog={handleDeleteLog}
-          />
-        )}
+            {activeTab === "logs" && (
+              <HourLogTable
+                logs={state.logs}
+                goals={state.goals}
+                activityStartDate={state.profile.activityStartDate}
+                onUpdateLog={handleUpdateLog}
+                onDeleteLog={handleDeleteLog}
+              />
+            )}
 
-        {activeTab === "goals" && (
-          <GoalsValidatorsView
-            goals={state.goals}
-            logs={state.logs}
-            onSaveGoal={handleSaveGoal}
-            onDeleteGoal={handleDeleteGoal}
-          />
-        )}
+            {activeTab === "goals" && (
+              <GoalsValidatorsView
+                goals={state.goals}
+                logs={state.logs}
+                onSaveGoal={handleSaveGoal}
+                onDeleteGoal={handleDeleteGoal}
+              />
+            )}
 
-        {activeTab === "expedition" && (
-          <ExpeditionTracker
-            expedition={state.expedition}
-            targetLevel={state.profile.targetLevel}
-            activityStartDate={state.profile.activityStartDate}
-            onUpdateExpedition={handleUpdateExpedition}
-          />
-        )}
+            {activeTab === "expedition" && (
+              <ExpeditionTracker
+                expedition={state.expedition}
+                targetLevel={state.profile.targetLevel}
+                activityStartDate={state.profile.activityStartDate}
+                onUpdateExpedition={handleUpdateExpedition}
+              />
+            )}
 
-        {activeTab === "export" && (
-          <ExportAndSubmittableView
-            state={state}
-            onImportState={(newState) => setState(newState)}
-            onResetSampleData={handleResetSampleData}
-            onSyncLocalToSupabase={handleSyncLocalStorageToSupabase}
-            onPullFromSupabase={pullFromSupabase}
-            syncStatus={syncStatus}
-            lastSyncedAt={lastSyncedAt}
-          />
-        )}
+            {activeTab === "export" && (
+              <ExportAndSubmittableView
+                state={state}
+                onImportState={handleImportJsonState}
+                onResetSampleData={handleResetSampleData}
+                onSyncLocalToSupabase={handleSyncLocalStorageToSupabase}
+                onPullFromSupabase={() => pullFromSupabase(false)}
+                syncStatus={syncStatus}
+                lastSyncedAt={lastSyncedAt}
+              />
+            )}
 
-        {activeTab === "profile" && (
-          <ProfileAdvisorView
-            profile={state.profile}
-            logs={state.logs}
-            onUpdateProfile={handleUpdateProfile}
-          />
+            {activeTab === "profile" && (
+              <ProfileAdvisorView
+                profile={state.profile}
+                logs={state.logs}
+                onUpdateProfile={handleUpdateProfile}
+              />
+            )}
+          </>
         )}
       </main>
+
+      {/* Real-time Supabase Operation Toast Notification */}
+      {toast && (
+        <div className="fixed bottom-20 lg:bottom-6 right-4 sm:right-6 z-50 max-w-sm animate-in fade-in slide-in-from-bottom-2">
+          <div
+            className={`flex items-center gap-2.5 px-4 py-3 rounded-xl shadow-lg border text-xs font-semibold ${
+              toast.type === "loading"
+                ? "bg-slate-900 text-white border-slate-700"
+                : toast.type === "success"
+                ? "bg-emerald-950 text-emerald-100 border-emerald-600/50"
+                : "bg-red-950 text-red-100 border-red-500/50"
+            }`}
+          >
+            {toast.type === "loading" ? (
+              <Loader2 className="w-4 h-4 text-blue-400 animate-spin shrink-0" />
+            ) : toast.type === "success" ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            ) : (
+              <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+            )}
+            <span className="flex-1">{toast.message}</span>
+            <button
+              type="button"
+              onClick={() => setToast(null)}
+              className="text-white/60 hover:text-white ml-1"
+              aria-label="Dismiss notification"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Mobile Bottom Navigation Bar */}
       <nav className="lg:hidden fixed bottom-0 inset-x-0 z-30 bg-white border-t border-slate-200 shadow-lg">
