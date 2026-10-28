@@ -6,22 +6,26 @@ import { calculateGoalStats, formatMonthLabel } from "@/lib/awardUtils";
 import { GoalItem, HourLogEntry, ProgramAreaId } from "@/lib/types";
 import {
   AlertCircle,
+  Briefcase,
+  Building2,
   CheckCircle2,
+  Loader2,
   Mail,
   Plus,
+  Save,
   ShieldCheck,
   Target,
   Trash2,
   UserCheck,
-  Briefcase,
-  Building2,
 } from "lucide-react";
 
 interface GoalsValidatorsViewProps {
   goals: GoalItem[];
   logs: HourLogEntry[];
-  onSaveGoal: (goal: GoalItem) => void;
-  onDeleteGoal: (id: string) => void;
+  onSaveGoal: (
+    goal: GoalItem
+  ) => Promise<{ success: boolean; message: string }>;
+  onDeleteGoal: (id: string) => Promise<void> | void;
 }
 
 export default function GoalsValidatorsView({
@@ -34,6 +38,8 @@ export default function GoalsValidatorsView({
   const [editingGoalId, setEditingGoalId] = useState<string | null>(null);
   const [draftGoal, setDraftGoal] = useState<GoalItem | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
 
   const areaMeta = PROGRAM_AREAS[selectedArea];
   const areaGoals = goals
@@ -47,7 +53,10 @@ export default function GoalsValidatorsView({
       goals.filter((g) => g.area === area).map((g) => g.goalNumber)
     );
     let nextNum = 1;
-    while (existingNums.has(nextNum) && nextNum <= PROGRAM_AREAS[area].maxGoals) {
+    while (
+      existingNums.has(nextNum) &&
+      nextNum <= PROGRAM_AREAS[area].maxGoals
+    ) {
       nextNum++;
     }
     const newGoal: GoalItem = {
@@ -68,6 +77,7 @@ export default function GoalsValidatorsView({
     setEditingGoalId(newGoal.id);
     setDraftGoal(newGoal);
     setFormError(null);
+    setSaveSuccessMsg(null);
   };
 
   const startEditGoal = (goal: GoalItem) => {
@@ -77,9 +87,10 @@ export default function GoalsValidatorsView({
       validator: { ...goal.validator },
     });
     setFormError(null);
+    setSaveSuccessMsg(null);
   };
 
-  const handleSaveDraft = (e: React.FormEvent) => {
+  const handleSaveDraft = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!draftGoal) return;
     setFormError(null);
@@ -108,9 +119,26 @@ export default function GoalsValidatorsView({
       return;
     }
 
-    onSaveGoal(draftGoal);
-    setEditingGoalId(null);
-    setDraftGoal(null);
+    setIsSaving(true);
+    try {
+      const res = await onSaveGoal(draftGoal);
+      if (res.success) {
+        setEditingGoalId(null);
+        setDraftGoal(null);
+        setSaveSuccessMsg("Saved successfully!");
+        setTimeout(() => {
+          setSaveSuccessMsg(null);
+        }, 3000);
+      } else {
+        setFormError(res.message || "Failed to save goal to database.");
+      }
+    } catch (err) {
+      setFormError(
+        err instanceof Error ? err.message : "Failed to save goal."
+      );
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -127,6 +155,13 @@ export default function GoalsValidatorsView({
               Official Goal Limits: VPS (Max 4 Goals) • Personal Development (Max 2 Goals) • Physical Fitness (Max 2 Goals)
             </p>
           </div>
+
+          {saveSuccessMsg && (
+            <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>{saveSuccessMsg}</span>
+            </div>
+          )}
         </div>
 
         {/* Area Tabs */}
@@ -144,7 +179,7 @@ export default function GoalsValidatorsView({
                   setEditingGoalId(null);
                   setDraftGoal(null);
                 }}
-                className={`p-4 rounded-xl border text-left transition-all flex items-center justify-between ${
+                className={`p-4 rounded-xl border text-left transition-all flex items-center justify-between cursor-pointer ${
                   isActive
                     ? "bg-slate-900 border-slate-900 text-white shadow-sm"
                     : "bg-slate-50 border-slate-200 text-slate-800 hover:bg-slate-100"
@@ -189,7 +224,7 @@ export default function GoalsValidatorsView({
             <button
               type="button"
               onClick={() => startNewGoal(selectedArea)}
-              className="shrink-0 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-sm transition-colors"
+              className="shrink-0 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-sm transition-colors cursor-pointer"
             >
               <Plus className="w-4 h-4" />
               Add {selectedArea} Goal ({areaGoals.length}/{areaMeta.maxGoals})
@@ -202,7 +237,7 @@ export default function GoalsValidatorsView({
         </div>
       </div>
 
-      {/* Add / Edit Goal & Validator Modal/Form Card */}
+      {/* Add / Edit Goal & Validator Form Card */}
       {draftGoal && (
         <form
           onSubmit={handleSaveDraft}
@@ -219,11 +254,12 @@ export default function GoalsValidatorsView({
             </div>
             <button
               type="button"
+              disabled={isSaving}
               onClick={() => {
                 setEditingGoalId(null);
                 setDraftGoal(null);
               }}
-              className="text-xs font-semibold text-slate-500 hover:text-slate-800 px-2.5 py-1 rounded-lg bg-slate-100"
+              className="text-xs font-semibold text-slate-500 hover:text-slate-800 px-2.5 py-1 rounded-lg bg-slate-100 cursor-pointer"
             >
               Cancel
             </button>
@@ -412,19 +448,31 @@ export default function GoalsValidatorsView({
           <div className="flex justify-end gap-2.5">
             <button
               type="button"
+              disabled={isSaving}
               onClick={() => {
                 setEditingGoalId(null);
                 setDraftGoal(null);
               }}
-              className="px-4 py-2 rounded-xl border border-slate-300 text-slate-700 text-xs font-semibold hover:bg-slate-50"
+              className="px-4 py-2.5 rounded-xl border border-slate-300 text-slate-700 text-xs font-semibold hover:bg-slate-50 cursor-pointer"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-sm"
+              disabled={isSaving}
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-xs font-bold shadow-sm cursor-pointer"
             >
-              Save Goal & Validator
+              {isSaving ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Saving...</span>
+                </>
+              ) : (
+                <>
+                  <Save className="w-4 h-4" />
+                  <span>Save Changes</span>
+                </>
+              )}
             </button>
           </div>
         </form>
@@ -460,14 +508,14 @@ export default function GoalsValidatorsView({
                     <button
                       type="button"
                       onClick={() => startEditGoal(goal)}
-                      className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold"
+                      className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold cursor-pointer"
                     >
                       Edit
                     </button>
                     <button
                       type="button"
                       onClick={() => onDeleteGoal(goal.id)}
-                      className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50"
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 cursor-pointer"
                       title="Delete Goal"
                     >
                       <Trash2 className="w-4 h-4" />

@@ -82,10 +82,6 @@ export default function HomePage() {
   const [toast, setToast] = useState<ToastMessage | null>(null);
 
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const profileDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const expeditionDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(
-    null
-  );
   // Prevent Realtime echo while a local CRUD request is in flight
   const isMutatingRef = useRef(false);
 
@@ -309,7 +305,9 @@ export default function HomePage() {
     }
   };
 
-  const handleUpdateProfile = (updatedProfile: ParticipantProfile) => {
+  const handleUpdateProfile = async (
+    updatedProfile: ParticipantProfile
+  ): Promise<{ success: boolean; message: string }> => {
     const nextState: CongressionalAwardState = {
       ...state,
       profile: updatedProfile,
@@ -317,27 +315,27 @@ export default function HomePage() {
     setState(nextState);
     saveToLocalCache(nextState);
 
-    if (!isSupabaseConfigured) return;
-
-    if (profileDebounceRef.current) {
-      clearTimeout(profileDebounceRef.current);
+    if (!isSupabaseConfigured) {
+      showToast("success", "Saved profile to LocalStorage!");
+      return { success: true, message: "Saved profile to LocalStorage!" };
     }
-    setSyncStatus("syncing");
-    profileDebounceRef.current = setTimeout(async () => {
-      isMutatingRef.current = true;
-      showToast("loading", "Saving profile to Supabase...");
-      const res = await updateProfileInSupabase(updatedProfile, profileId);
-      isMutatingRef.current = false;
 
-      if (res.success) {
-        setLastSyncedAt(new Date().toLocaleTimeString());
-        setSyncStatus("synced");
-        showToast("success", "Profile saved to Supabase");
-      } else {
-        setSyncStatus("error");
-        showToast("error", res.message, 5000);
-      }
-    }, 500);
+    isMutatingRef.current = true;
+    setSyncStatus("syncing");
+    showToast("loading", "Saving profile to Supabase...");
+    const res = await updateProfileInSupabase(updatedProfile, profileId);
+    isMutatingRef.current = false;
+
+    if (res.success) {
+      setLastSyncedAt(new Date().toLocaleTimeString());
+      setSyncStatus("synced");
+      showToast("success", "Saved successfully!");
+    } else {
+      setSyncStatus("error");
+      showToast("error", res.message, 5000);
+    }
+
+    return res;
   };
 
   const handleAddLog = async (
@@ -425,7 +423,9 @@ export default function HomePage() {
     }
   };
 
-  const handleSaveGoal = async (goal: GoalItem) => {
+  const handleSaveGoal = async (
+    goal: GoalItem
+  ): Promise<{ success: boolean; message: string }> => {
     const exists = state.goals.some((g) => g.id === goal.id);
     const updatedGoals = exists
       ? state.goals.map((g) => (g.id === goal.id ? goal : g))
@@ -437,7 +437,10 @@ export default function HomePage() {
     setState(nextState);
     saveToLocalCache(nextState);
 
-    if (!isSupabaseConfigured) return;
+    if (!isSupabaseConfigured) {
+      showToast("success", "Saved goal to LocalStorage!");
+      return { success: true, message: "Saved goal to LocalStorage!" };
+    }
 
     isMutatingRef.current = true;
     setSyncStatus("syncing");
@@ -448,11 +451,13 @@ export default function HomePage() {
     if (res.success) {
       setLastSyncedAt(new Date().toLocaleTimeString());
       setSyncStatus("synced");
-      showToast("success", res.message);
+      showToast("success", "Saved successfully!");
     } else {
       setSyncStatus("error");
       showToast("error", res.message, 5000);
     }
+
+    return res;
   };
 
   const handleDeleteGoal = async (id: string) => {
@@ -481,7 +486,9 @@ export default function HomePage() {
     }
   };
 
-  const handleUpdateExpedition = (updatedExpedition: ExpeditionData) => {
+  const handleUpdateExpedition = async (
+    updatedExpedition: ExpeditionData
+  ): Promise<{ success: boolean; message: string }> => {
     const nextState: CongressionalAwardState = {
       ...state,
       expedition: updatedExpedition,
@@ -489,31 +496,31 @@ export default function HomePage() {
     setState(nextState);
     saveToLocalCache(nextState);
 
-    if (!isSupabaseConfigured) return;
-
-    if (expeditionDebounceRef.current) {
-      clearTimeout(expeditionDebounceRef.current);
+    if (!isSupabaseConfigured) {
+      showToast("success", "Saved expedition to LocalStorage!");
+      return { success: true, message: "Saved expedition to LocalStorage!" };
     }
-    setSyncStatus("syncing");
-    expeditionDebounceRef.current = setTimeout(async () => {
-      isMutatingRef.current = true;
-      showToast("loading", "Saving expedition changes to Supabase...");
-      const res = await updateExpeditionInSupabase(
-        updatedExpedition,
-        state.profile,
-        profileId
-      );
-      isMutatingRef.current = false;
 
-      if (res.success) {
-        setLastSyncedAt(new Date().toLocaleTimeString());
-        setSyncStatus("synced");
-        showToast("success", res.message);
-      } else {
-        setSyncStatus("error");
-        showToast("error", res.message, 5000);
-      }
-    }, 500);
+    isMutatingRef.current = true;
+    setSyncStatus("syncing");
+    showToast("loading", "Saving expedition changes to Supabase...");
+    const res = await updateExpeditionInSupabase(
+      updatedExpedition,
+      state.profile,
+      profileId
+    );
+    isMutatingRef.current = false;
+
+    if (res.success) {
+      setLastSyncedAt(new Date().toLocaleTimeString());
+      setSyncStatus("synced");
+      showToast("success", "Saved successfully!");
+    } else {
+      setSyncStatus("error");
+      showToast("error", res.message, 5000);
+    }
+
+    return res;
   };
 
   const handleExportOfficialCsv = () => {
