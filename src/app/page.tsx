@@ -675,16 +675,16 @@ export default function HomePage() {
   ];
 
   return (
-    <div className="min-h-screen flex flex-col pb-20 lg:pb-10">
-      {/* Top Sticky Navigation Header */}
-      <header className="sticky top-0 z-30 bg-slate-950/95 backdrop-blur-md border-b border-slate-800 text-white">
+    <div className="min-h-screen flex flex-col pb-24 sm:pb-10">
+      {/* Top Sticky Navigation Header (with iOS Notch Safe-Area Padding) */}
+      <header className="sticky top-0 z-30 bg-slate-950/95 backdrop-blur-md border-b border-slate-800 text-white pt-safe select-none">
         <div className="max-w-7xl mx-auto px-4 sm:px-6">
           <div className="h-16 flex items-center justify-between gap-3">
             {/* Brand Logo */}
             <button
               type="button"
               onClick={() => setActiveTab("dashboard")}
-              className="flex items-center gap-2.5 text-left group"
+              className="flex items-center gap-2.5 text-left group cursor-pointer"
             >
               <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-400 to-amber-600 flex items-center justify-center text-slate-950 shadow-sm">
                 <Award className="w-5 h-5" />
@@ -707,8 +707,8 @@ export default function HomePage() {
               <button
                 type="button"
                 onClick={() => setActiveTab("export")}
-                title="View Supabase Cloud Sync & Backup settings"
-                className={`hidden md:inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-semibold border transition-colors ${
+                title="View Supabase Cloud Sync & Submittable Backup"
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-semibold border transition-colors cursor-pointer ${
                   syncStatus === "synced"
                     ? "bg-emerald-500/15 border-emerald-400/30 text-emerald-300"
                     : syncStatus === "syncing"
@@ -721,22 +721,22 @@ export default function HomePage() {
                 {syncStatus === "syncing" ? (
                   <>
                     <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-400" />
-                    <span>Syncing...</span>
+                    <span className="hidden md:inline">Syncing...</span>
                   </>
                 ) : syncStatus === "synced" ? (
                   <>
                     <Cloud className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>Supabase Live</span>
+                    <span className="hidden md:inline">Supabase Live</span>
                   </>
                 ) : syncStatus === "error" ? (
                   <>
                     <CloudOff className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Sync Error</span>
+                    <span className="hidden md:inline">Sync Error</span>
                   </>
                 ) : (
                   <>
                     <CloudOff className="w-3.5 h-3.5 text-slate-400" />
-                    <span>LocalStorage Mode</span>
+                    <span className="hidden md:inline">LocalStorage Mode</span>
                   </>
                 )}
               </button>
@@ -744,7 +744,7 @@ export default function HomePage() {
               <button
                 type="button"
                 onClick={() => setShowQuickLogModal(true)}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-sm transition-colors"
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-sm transition-colors cursor-pointer"
               >
                 <PlusCircle className="w-4 h-4" />
                 <span>Quick Log</span>
@@ -753,7 +753,7 @@ export default function HomePage() {
               <button
                 type="button"
                 onClick={handleExportOfficialCsv}
-                className="hidden sm:inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white font-semibold text-xs transition-colors"
+                className="hidden sm:inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white font-semibold text-xs transition-colors cursor-pointer"
                 title="Download Official CSV Hour Log"
               >
                 <Download className="w-3.5 h-3.5 text-amber-400" />
@@ -762,8 +762,8 @@ export default function HomePage() {
             </div>
           </div>
 
-          {/* Desktop Tab Bar */}
-          <nav className="hidden lg:flex items-center gap-1 pb-2 overflow-x-auto">
+          {/* Tablet & Desktop Tab Bar */}
+          <nav className="hidden sm:flex items-center gap-1 pb-2 overflow-x-auto">
             {navItems.map((item) => {
               const Icon = item.icon;
               const isActive = activeTab === item.id;
@@ -772,7 +772,7 @@ export default function HomePage() {
                   key={item.id}
                   type="button"
                   onClick={() => setActiveTab(item.id)}
-                  className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap ${
+                  className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap cursor-pointer ${
                     isActive
                       ? "bg-blue-600 text-white shadow-xs"
                       : "text-slate-300 hover:text-white hover:bg-white/10"
@@ -896,41 +896,112 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* Mobile Bottom Navigation Bar */}
-      <nav className="lg:hidden fixed bottom-0 inset-x-0 z-30 bg-white border-t border-slate-200 shadow-lg">
-        <div className="grid grid-cols-6 h-16">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = activeTab === item.id;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => setActiveTab(item.id)}
-                className={`flex flex-col items-center justify-center gap-1 text-[10px] font-semibold transition-colors ${
-                  isActive
-                    ? "text-blue-600 bg-blue-50/50"
-                    : "text-slate-500 hover:text-slate-900"
-                }`}
-              >
-                <Icon
-                  className={`w-4 h-4 ${
-                    isActive ? "text-blue-600" : "text-slate-400"
-                  }`}
-                />
-                <span className="truncate max-w-full px-1">
-                  {item.shortLabel}
-                </span>
-              </button>
-            );
-          })}
+      {/* Sticky Mobile Bottom Navigation Bar (sm:hidden + pb-safe for iOS Home Bar) */}
+      <nav className="sm:hidden fixed bottom-0 inset-x-0 z-30 bg-white/95 backdrop-blur-md border-t border-slate-200 shadow-lg pb-safe select-none">
+        <div className="grid grid-cols-6 h-16 items-center">
+          <button
+            type="button"
+            onClick={() => setActiveTab("dashboard")}
+            className={`flex flex-col items-center justify-center gap-1 h-full text-[10px] font-semibold transition-colors ${
+              activeTab === "dashboard"
+                ? "text-blue-600 bg-blue-50/50"
+                : "text-slate-500 active:text-slate-900"
+            }`}
+          >
+            <LayoutDashboard
+              className={`w-4 h-4 ${
+                activeTab === "dashboard" ? "text-blue-600" : "text-slate-400"
+              }`}
+            />
+            <span className="truncate max-w-full px-1">Home</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab("logs")}
+            className={`flex flex-col items-center justify-center gap-1 h-full text-[10px] font-semibold transition-colors ${
+              activeTab === "logs"
+                ? "text-blue-600 bg-blue-50/50"
+                : "text-slate-500 active:text-slate-900"
+            }`}
+          >
+            <ClipboardList
+              className={`w-4 h-4 ${
+                activeTab === "logs" ? "text-blue-600" : "text-slate-400"
+              }`}
+            />
+            <span className="truncate max-w-full px-1">Hour Log</span>
+          </button>
+
+          {/* One-Thumb Quick Log Action Button */}
+          <button
+            type="button"
+            onClick={() => setShowQuickLogModal(true)}
+            className="flex flex-col items-center justify-center gap-0.5 h-full text-[10px] font-bold text-amber-600 active:scale-95 transition-transform"
+          >
+            <div className="w-8 h-8 rounded-full bg-amber-500 text-slate-950 flex items-center justify-center shadow-sm">
+              <PlusCircle className="w-4 h-4" />
+            </div>
+            <span className="truncate max-w-full px-0.5">Quick Log</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab("goals")}
+            className={`flex flex-col items-center justify-center gap-1 h-full text-[10px] font-semibold transition-colors ${
+              activeTab === "goals"
+                ? "text-blue-600 bg-blue-50/50"
+                : "text-slate-500 active:text-slate-900"
+            }`}
+          >
+            <Target
+              className={`w-4 h-4 ${
+                activeTab === "goals" ? "text-blue-600" : "text-slate-400"
+              }`}
+            />
+            <span className="truncate max-w-full px-1">Goals</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab("expedition")}
+            className={`flex flex-col items-center justify-center gap-1 h-full text-[10px] font-semibold transition-colors ${
+              activeTab === "expedition"
+                ? "text-blue-600 bg-blue-50/50"
+                : "text-slate-500 active:text-slate-900"
+            }`}
+          >
+            <Compass
+              className={`w-4 h-4 ${
+                activeTab === "expedition" ? "text-blue-600" : "text-slate-400"
+              }`}
+            />
+            <span className="truncate max-w-full px-1">Expedition</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab("profile")}
+            className={`flex flex-col items-center justify-center gap-1 h-full text-[10px] font-semibold transition-colors ${
+              activeTab === "profile"
+                ? "text-blue-600 bg-blue-50/50"
+                : "text-slate-500 active:text-slate-900"
+            }`}
+          >
+            <User
+              className={`w-4 h-4 ${
+                activeTab === "profile" ? "text-blue-600" : "text-slate-400"
+              }`}
+            />
+            <span className="truncate max-w-full px-1">Profile</span>
+          </button>
         </div>
       </nav>
 
-      {/* Quick Log Modal (Accessible from Header on any screen) */}
+      {/* Quick Log Modal (Accessible from Header & Bottom Bar on any screen) */}
       {showQuickLogModal && (
         <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4">
-          <div className="w-full max-w-xl bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl max-h-[92vh] overflow-y-auto relative">
+          <div className="w-full max-w-xl bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl max-h-[92vh] overflow-y-auto relative pb-safe">
             <button
               type="button"
               onClick={() => setShowQuickLogModal(false)}
